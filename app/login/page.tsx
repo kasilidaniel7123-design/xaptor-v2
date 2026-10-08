@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 
@@ -17,6 +17,13 @@ export default function LoginPage() {
   const [successMsg, setSuccessMsg] = useState('');
 
   const [theme, setTheme] = useState<'dark' | 'red-galaxy' | 'light'>('dark');
+
+  // Set in the browser after load (reading the date while the page is
+  // being built breaks the Next.js build)
+  const [year, setYear] = useState('');
+  useEffect(() => {
+    setYear(String(new Date().getFullYear()));
+  }, []);
 
   const switchMode = (mode: 'signin' | 'signup' | 'forgot') => {
     setAuthMode(mode);
@@ -221,7 +228,7 @@ export default function LoginPage() {
         )}
 
         <div className="text-center text-[11px] opacity-60 pt-2">
-          &copy; {new Date().getFullYear()} Xaptor. All Rights Reserved. Unauthorized duplication is strictly prohibited.
+          &copy; {year} Xaptor. All Rights Reserved. Unauthorized duplication is strictly prohibited.
         </div>
       </div>
     </main>

@@ -1,9 +1,16 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 
 export default function TermsPage() {
+  // Set in the browser after load (reading the date while the page is
+  // being built breaks the Next.js build)
+  const [year, setYear] = useState('');
+  useEffect(() => {
+    setYear(String(new Date().getFullYear()));
+  }, []);
+
   return (
     <main className="min-h-screen bg-slate-950 text-white p-6 md:p-12 flex justify-center">
       <div className="w-full max-w-3xl space-y-6 bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl">
@@ -12,8 +19,8 @@ export default function TermsPage() {
             <h1 className="text-2xl font-bold text-blue-400">Krone ERP</h1>
             <p className="text-xs opacity-70">Terms of Service, Liability Disclaimer & Copyright Policy</p>
           </div>
-          <Link 
-            href="/login" 
+          <Link
+            href="/login"
             className="text-xs bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg font-medium transition text-white"
           >
             Back to Login
@@ -51,7 +58,7 @@ export default function TermsPage() {
         </div>
 
         <div className="border-t border-slate-800 pt-4 flex justify-between items-center text-[11px] opacity-60">
-          <span>&copy; {new Date().getFullYear()} Krone ERP, a product of KAS Innovations. All Rights Reserved.</span>
+          <span>&copy; {year} Krone ERP, a product of KAS Innovations. All Rights Reserved.</span>
           <Link href="/login" className="hover:underline">Return to Workspace Sign In</Link>
         </div>
       </div>
