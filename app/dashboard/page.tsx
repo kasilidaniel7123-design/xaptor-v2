@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any, @next/next/no-img-element */
+
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 
@@ -99,6 +101,9 @@ interface ReceiptRecord {
 // ============================================================
 // Helpers
 // ============================================================
+// NOTE: never call this while the page renders. Next.js pre-renders pages
+// during the build, and reading the current date at that point breaks it.
+// It is only called inside effects and event handlers.
 const localIsoDate = () => {
   const d = new Date();
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0];
@@ -187,10 +192,13 @@ const safeCalculate = (expr: string): string => {
 };
 
 export default function DashboardPage() {
-  const todayIso = localIsoDate();
+  // Dates are filled in by the browser after the page loads (see effect below).
+  const [todayIso, setTodayIso] = useState('');
+  const [todayLabel, setTodayLabel] = useState('');
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [authError, setAuthError] = useState<string>('');
+  const [loadError, setLoadError] = useState<string>('');
   const [userId, setUserId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('inventory');
   const [inventoryView, setInventoryView] = useState<'materials' | 'equipment'>('materials');
@@ -231,8 +239,8 @@ export default function DashboardPage() {
   const [newEqDate, setNewEqDate] = useState('');
   const [newEqNotes, setNewEqNotes] = useState('');
 
-  // Daily intake form
-  const [intakeDate, setIntakeDate] = useState(todayIso);
+  // Daily intake form (empty date means "today")
+  const [intakeDate, setIntakeDate] = useState('');
   const [intakeSupplier, setIntakeSupplier] = useState('');
   const [intakePhone, setIntakePhone] = useState('');
   const [intakeMaterialQuery, setIntakeMaterialQuery] = useState('');
@@ -241,6 +249,7 @@ export default function DashboardPage() {
   const [intakeRate, setIntakeRate] = useState('');
   const [intakeAmount, setIntakeAmount] = useState('');
   const [intakePayment, setIntakePayment] = useState<'Cash' | 'Mobile Money'>('Cash');
+  const [savingIntake, setSavingIntake] = useState(false);
 
   const [expenseDesc, setExpenseDesc] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
@@ -259,6 +268,24 @@ export default function DashboardPage() {
 
   const [startDateFilter, setStartDateFilter] = useState('');
   const [endDateFilter, setEndDateFilter] = useState('');
+
+  // ============================================================
+  // Current date (browser only). Re-checks every minute so the page
+  // moves to the new day by itself if it is left open overnight.
+  // ============================================================
+  useEffect(() => {
+    const sync = () => {
+      const iso = localIsoDate();
+      setTodayIso((prev) => (prev === iso ? prev : iso));
+      setTodayLabel(new Date().toLocaleDateString());
+    };
+    const first = setTimeout(sync, 0);
+    const timer = setInterval(sync, 60000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, []);
 
   // ============================================================
   // Session check + initial data load
@@ -289,41 +316,62 @@ export default function DashboardPage() {
   }, []);
 
   const fetchAllLiveData = async (accountId: string) => {
+    const errors: string[] = [];
     try {
       const { data: matData, error: matErr } = await supabase.from('materials').select('*').eq('account_id', accountId);
-      if (matErr) console.error('Error fetching materials:', matErr);
+      if (matErr) errors.push(`materials (${matErr.message})`);
       if (matData) setMaterials(matData.map(mapMaterial));
 
       const { data: eqData, error: eqErr } = await supabase.from('equipment').select('*').eq('account_id', accountId);
-      if (eqErr) console.error('Error fetching equipment:', eqErr);
+      if (eqErr) errors.push(`equipment (${eqErr.message})`);
       if (eqData) setEquipment(eqData.map(mapEquipment));
 
       const { data: intakeData, error: intakeErr } = await supabase.from('material_intakes').select('*').eq('account_id', accountId);
-      if (intakeErr) console.error('Error fetching collections:', intakeErr);
+      if (intakeErr) errors.push(`collections (${intakeErr.message})`);
       if (intakeData) setIntakes(intakeData.map(mapIntake));
 
       const { data: expData, error: expErr } = await supabase.from('daily_expenses').select('*').eq('account_id', accountId);
-      if (expErr) console.error('Error fetching daily expenses:', expErr);
+      if (expErr) errors.push(`expenses (${expErr.message})`);
       if (expData) setDailyExpenses(expData.map((e: any) => ({ ...e, amount: Number(e.amount) || 0 })));
 
       const { data: damData, error: damErr } = await supabase.from('damaged_goods').select('*').eq('account_id', accountId);
-      if (damErr) console.error('Error fetching wastage:', damErr);
+      if (damErr) errors.push(`wastage (${damErr.message})`);
       if (damData) setDamagedGoods(damData.map((d: any) => ({ ...d, quantity: Number(d.quantity) || 0, loss_value: Number(d.loss_value) || 0 })));
 
       const { data: recData, error: recErr } = await supabase.from('receipts').select('*').eq('account_id', accountId);
-      if (recErr) console.error('Error fetching receipts:', recErr);
-      if (recData) setReceiptHistory(recData);
+      if (recErr) errors.push(`documents (${recErr.message})`);
+      if (recData) {
+        const sorted = [...recData].sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+        setReceiptHistory(sorted.map((r: any) => ({
+          ...r,
+          total_amount: Number(r.total_amount) || 0,
+          customer_phone: r.customer_phone || '',
+          customer_email: r.customer_email || '',
+          items: Array.isArray(r.items) ? r.items : [],
+        })));
+      }
 
       const { data: profData, error: profErr } = await supabase
         .from('business_profile')
         .select('*')
         .eq('account_id', accountId)
         .maybeSingle();
-      if (profErr) console.error('Error fetching business profile:', profErr);
-      if (profData) setProfile(profData);
+      if (profErr) errors.push(`business profile (${profErr.message})`);
+      if (profData) {
+        setProfile({
+          name: profData.name || '',
+          location: profData.location || '',
+          phone: profData.phone || '',
+          email: profData.email || '',
+          website: profData.website || '',
+          logo_url: profData.logo_url || '',
+        });
+      }
     } catch (err) {
-      console.error('Error fetching live Supabase data:', err);
+      errors.push(err instanceof Error ? err.message : 'unexpected error');
     }
+    if (errors.length) console.error('Data load problems:', errors);
+    setLoadError(errors.join(' • '));
   };
 
   const handleLogout = async () => {
@@ -442,7 +490,7 @@ export default function DashboardPage() {
     const { error: stockErr } = await supabase.from('materials').update({ quantity_kg: newQty }).eq('id', id).eq('account_id', userId);
     if (stockErr) { alert('Error updating stock: ' + stockErr.message); return; }
     const { data, error } = await supabase.from('damaged_goods').insert([{
-      name: target.name, quantity: lostKg, loss_value: lossVal, date_str: todayIso, account_id: userId,
+      name: target.name, quantity: lostKg, loss_value: lossVal, date_str: localIsoDate(), account_id: userId,
     }]).select();
     if (error) { alert('Error logging wastage: ' + error.message); return; }
     if (data) setDamagedGoods([...damagedGoods, { ...data[0], quantity: Number(data[0].quantity), loss_value: Number(data[0].loss_value) }]);
@@ -460,7 +508,7 @@ export default function DashboardPage() {
       i + 1, m.name, m.category, m.quantityKg.toFixed(2), money(m.ratePerKg), money(m.quantityKg * m.ratePerKg),
     ]);
     generatePDF('Recycling Materials Inventory', [['#', 'Material', 'Category', 'Stock (KG)', 'Rate / KG', 'Est. Value']], body,
-      `materials-inventory-${todayIso}.pdf`,
+      `materials-inventory-${localIsoDate()}.pdf`,
       [`Total Stock: ${fmtKg(totalMaterialKg)}`, `Estimated Value: ${money(totalMaterialValue)} ZMW`]);
   };
 
@@ -518,7 +566,7 @@ export default function DashboardPage() {
       i + 1, q.name, q.category, q.quantity, q.condition, money(q.unitValue), money(q.quantity * q.unitValue), q.dateAcquired || '-',
     ]);
     generatePDF('Equipment List', [['#', 'Equipment', 'Category', 'Qty', 'Condition', 'Unit Value', 'Total Value', 'Acquired']], body,
-      `equipment-list-${todayIso}.pdf`,
+      `equipment-list-${localIsoDate()}.pdf`,
       [
         `Total Units: ${totalEquipmentUnits}`,
         `Total Value: ${money(totalEquipmentValue)} ZMW`,
@@ -601,9 +649,10 @@ export default function DashboardPage() {
     if (!isNaN(w) && !isNaN(r)) setIntakeAmount((w * r).toFixed(2));
   };
 
-  const handleAddIntake = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const saveIntake = async () => {
     if (!userId) return;
+    const today = localIsoDate();
+    const dateUsed = intakeDate || today;
     const matName = intakeMaterialQuery.trim();
     const supplier = intakeSupplier.trim();
     const weight = parseFloat(intakeWeight);
@@ -612,7 +661,7 @@ export default function DashboardPage() {
       alert('Please fill in the supplier name, material, weight (KG) and amount paid.');
       return;
     }
-    if (intakeDate > todayIso) { alert('The date cannot be in the future.'); return; }
+    if (dateUsed > today) { alert('The date cannot be in the future.'); return; }
 
     let material = materials.find((m) => m.name.toLowerCase() === matName.toLowerCase());
     let createdMaterial = false;
@@ -638,7 +687,7 @@ export default function DashboardPage() {
       rate_per_kg: rate,
       amount_paid: paid,
       payment_method: intakePayment,
-      date_str: intakeDate,
+      date_str: dateUsed,
       account_id: userId,
     }]).select();
     if (intakeErr || !intakeData) {
@@ -667,7 +716,19 @@ export default function DashboardPage() {
 
     setIntakeSupplier(''); setIntakePhone(''); setIntakeMaterialQuery('');
     setIntakeWeight(''); setIntakeRate(''); setIntakeAmount('');
-    setIntakeDate(todayIso);
+    setIntakeDate('');
+  };
+
+  // Wrapper that blocks double submits (e.g. double-clicking the button)
+  const handleAddIntake = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (savingIntake) return;
+    setSavingIntake(true);
+    try {
+      await saveIntake();
+    } finally {
+      setSavingIntake(false);
+    }
   };
 
   const handleDeleteIntake = async (rec: MaterialIntake) => {
@@ -689,7 +750,7 @@ export default function DashboardPage() {
     e.preventDefault();
     if (!expenseDesc || !expenseAmount || !userId) return;
     const { data, error } = await supabase.from('daily_expenses').insert([{
-      description: expenseDesc, amount: parseFloat(expenseAmount), date_str: todayIso, account_id: userId,
+      description: expenseDesc, amount: parseFloat(expenseAmount), date_str: localIsoDate(), account_id: userId,
     }]).select();
     if (error) { alert('Error adding expense: ' + error.message); return; }
     if (data) setDailyExpenses([...dailyExpenses, { ...data[0], amount: Number(data[0].amount) }]);
@@ -782,7 +843,7 @@ export default function DashboardPage() {
     if (!customerName || receiptItems.length === 0 || !userId) return;
     const totalAmount = receiptItems.reduce((acc, item) => acc + item.quantity * item.price, 0);
     const prefix = receiptType === 'Quotation' ? 'QUO' : receiptType === 'Invoice' ? 'INV' : 'REC';
-    const recId = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const recId = `${prefix}-${Math.floor(100000 + Math.random() * 900000)}`;
 
     const newRec: ReceiptRecord = {
       id: recId,
@@ -1048,13 +1109,19 @@ export default function DashboardPage() {
 
         <section className="flex-1 min-w-0">
 
+        {loadError && (
+          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl p-3">
+            Some data could not be loaded: {loadError}. If a table does not exist, run the database setup SQL in Supabase.
+          </div>
+        )}
+
         {/* ===================== INVENTORY ===================== */}
         {activeTab === 'inventory' && (
           <div className={`p-6 md:p-8 rounded-2xl shadow-sm space-y-6 border ${cardBg}`}>
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b pb-4 gap-4">
               <div>
                 <h2 className="text-xl md:text-2xl font-bold tracking-tight">RECYCLING INVENTORY</h2>
-                <p className="text-xs text-slate-500">Date: {new Date().toLocaleDateString()}</p>
+                <p className="text-xs text-slate-500">Date: {todayLabel}</p>
               </div>
               <div className="text-right text-xs text-slate-500">
                 <p className="font-bold">{profile.name}</p>
@@ -1290,7 +1357,7 @@ export default function DashboardPage() {
             <form onSubmit={handleAddIntake} className="bg-slate-50 p-4 rounded-xl grid grid-cols-1 md:grid-cols-4 gap-3 items-end border border-slate-200">
               <div>
                 <label className={labelCls}>Date</label>
-                <input type="date" required max={todayIso} className={inputStyle} value={intakeDate} onChange={(e) => setIntakeDate(e.target.value)} />
+                <input type="date" required max={todayIso || undefined} className={inputStyle} value={intakeDate || todayIso} onChange={(e) => setIntakeDate(e.target.value)} />
               </div>
               <div>
                 <label className={labelCls}>Supplier Name *</label>
@@ -1373,7 +1440,9 @@ export default function DashboardPage() {
                 )}
               </div>
 
-              <button type="submit" className={`font-medium text-xs py-3 px-4 rounded-lg transition md:col-span-4 ${primaryBtn}`}>+ Record Collection</button>
+              <button type="submit" disabled={savingIntake} className={`font-medium text-xs py-3 px-4 rounded-lg transition md:col-span-4 disabled:opacity-50 ${primaryBtn}`}>
+                {savingIntake ? 'Saving...' : '+ Record Collection'}
+              </button>
             </form>
 
             <div className="overflow-x-auto">
