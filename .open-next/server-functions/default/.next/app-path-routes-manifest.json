@@ -1,9 +1,0 @@
-{
-  "/_global-error/page": "/_global-error",
-  "/_not-found/page": "/_not-found",
-  "/dashboard/page": "/dashboard",
-  "/login/page": "/login",
-  "/page": "/",
-  "/splash/page": "/splash",
-  "/terms/page": "/terms"
-}
